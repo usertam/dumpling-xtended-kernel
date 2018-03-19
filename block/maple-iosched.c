@@ -46,6 +46,10 @@ struct maple_data {
 	int fifo_batch;
 	int writes_starved;
 	int sleep_latency_multiple;
+
+	/* Display state */
+	struct notifier_block fb_notifier;
+	int display_on;
 };
 
 static inline struct maple_data *
@@ -86,10 +90,10 @@ maple_add_request(struct request_queue *q, struct request *rq)
 	 * Add request to the proper fifo list and set its
 	 * expire time.
 	 */
-	if (!state_suspended && mdata->fifo_expire[sync][dir]) {
+	if (mdata->display_on && mdata->fifo_expire[sync][dir]) {
 		rq->fifo_time = jiffies + mdata->fifo_expire[sync][dir];
 		list_add_tail(&rq->queuelist, &mdata->fifo_list[sync][dir]);
-	} else if (state_suspended && fifo_expire_suspended) {
+	} else if (!mdata->display_on && fifo_expire_suspended) {
 		rq->fifo_time = jiffies + fifo_expire_suspended;
 		list_add_tail(&rq->queuelist, &mdata->fifo_list[sync][dir]);
 	}
@@ -214,7 +218,8 @@ maple_dispatch_requests(struct request_queue *q, int force)
 	/* Retrieve request */
 	if (!rq) {
 		/* Treat writes fairly while suspended, otherwise allow them to be starved */
-		if (mdata->display_on && mdata->starved >= mdata->writes_starved)
+		if (mdata->display_on &&
+		    mdata->starved >= mdata->writes_starved)
 			data_dir = WRITE;
 		else if (!mdata->display_on && mdata->starved >= 1)
 			data_dir = WRITE;
@@ -262,22 +267,22 @@ static int fb_notifier_callback(struct notifier_block *self,
 				unsigned long event, void *data)
 {
 	struct maple_data *mdata = container_of(self,
-									struct maple_data, fb_notifier);
+						struct maple_data, fb_notifier);
 	struct fb_event *evdata = data;
 	int *blank;
 
 	if (evdata && evdata->data && event == FB_EVENT_BLANK) {
 		blank = evdata->data;
 		switch (*blank) {
-			case FB_BLANK_UNBLANK:
-				mdata->display_on = true;
-				break;
-			case FB_BLANK_POWERDOWN:
-			case FB_BLANK_HSYNC_SUSPEND:
-			case FB_BLANK_VSYNC_SUSPEND:
-			case FB_BLANK_NORMAL:
-				mdata->display_on = false;
-				break;
+		case FB_BLANK_UNBLANK:
+			mdata->display_on = 1;
+			break;
+		case FB_BLANK_POWERDOWN:
+		case FB_BLANK_HSYNC_SUSPEND:
+		case FB_BLANK_VSYNC_SUSPEND:
+		case FB_BLANK_NORMAL:
+			mdata->display_on = 0;
+			break;
 		}
 	}
 
